@@ -40,6 +40,7 @@ const char* infeasible_string(int code) {
     case INFEASIBLE_DUP: return "Already in reply";
     case INFEASIBLE_HR: return "Homogeneous redundancy";
     case INFEASIBLE_BANDWIDTH: return "Download bandwidth too low";
+    case INFEASIBLE_RSA_KEYS: return "RSA keys do not exist";
     }
     return "Unknown";
 }
@@ -284,6 +285,15 @@ int wu_is_infeasible_fast(
     APP& app, BEST_APP_VERSION& bav
 ) {
     int retval;
+
+    // Don't send if host did not locally generate RSA keys and job is not of key generator app
+    if (!strlen(g_reply->host.public_key) && strcmp(app.name, "key_gen")) {
+        log_messages.printf(MSG_NORMAL,
+            "[send_job] [HOST#%lu] [WU#%lu %s] Not sending job, because host did not generate RSA keys\n",
+            g_reply->host.id, wu.id, wu.name
+        );
+        return INFEASIBLE_RSA_KEYS;
+    }
 
     // project-specific check
     //
