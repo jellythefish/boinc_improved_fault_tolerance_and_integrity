@@ -56,6 +56,87 @@
 
 #include "sched_send.h"
 
+#include "process_input_template.h"
+#include "filesys.h"
+#include <openssl/sha.h>
+#include <iomanip>
+#include <openssl/bio.h>
+#include <openssl/rsa.h>
+#include <openssl/pem.h>
+#include <openssl/err.h>
+#include <cstring>
+#include <fstream>
+
+#include <stdio.h>
+#include <string>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include "filesys.h"
+#include "md5_file.h"
+#include "str_replace.h"
+#include "sched_config.h"
+#include "sched_util.h"
+#include "process_input_template.h"
+#include "boinc_db.h"
+#include "sched_config.h"
+#include "backend_lib.h"
+extern bool got_md5_info(
+    const char *path,
+    char *md5data,
+    double *nbytes
+) {
+    char md5name[512];
+    struct stat md5stat, filestat;
+    char endline='\0';
+
+    sprintf(md5name, "%s.md5", path);
+    
+    // get mod times for file
+    //
+    if (stat(path, &filestat)) {
+        return false;
+    }
+  
+    // get mod time for md5 cache file
+    //
+    // coverity[toctou]
+    if (stat(md5name, &md5stat)) {
+        return false;
+    }
+    
+    // if cached md5 newer, then open it
+#ifndef _USING_FCGI_
+    FILE *fp=fopen(md5name, "r");
+#else
+    FCGI_FILE *fp=FCGI::fopen(md5name, "r");
+#endif
+    if (!fp) {
+        return false;
+    }
+  
+    // read two quantities: md5 sum and length.
+    // If we can't read these, or there is MORE stuff in the file,
+    // it's not an md5 cache file
+    //
+    int n = fscanf(fp, "%s %lf%c", md5data, nbytes, &endline);
+    int c = fgetc(fp);
+    fclose(fp);
+    if ((n != 3) || (endline !='\n') || (c != EOF)) {
+        fprintf(stderr, "bad MD5 cache file %s; remove it and stage file again\n", md5name);
+        return false;
+    }
+
+    // if this is one of our cached md5 files, but it's OLDER than the
+    // data file which it supposedly corresponds to, delete it.
+    //
+    if (md5stat.st_mtime<filestat.st_mtime) {
+        unlink(md5name);
+        return false;
+    }
+    return true;
+}
+
 #ifdef _USING_FCGI_
 #include "boinc_fcgi.h"
 #endif
@@ -568,6 +649,150 @@ static int insert_wu_tags(WORKUNIT& wu, APP& app) {
     return insert_after(wu.xml_doc, "<workunit>\n", buf);
 }
 
+static int insert_integrity_data_file(WORKUNIT& wu, const char* filename) {
+    char md5[33], buf[4096], url[256];
+    double nbytes;
+
+    dir_hier_path(
+        filename, config.download_dir,
+        config.uldl_dir_fanout, buf, true
+    );
+    if (!got_md5_info(buf, md5, &nbytes)) {
+        log_messages.printf(MSG_NORMAL,
+            "missing MD5 info file for %s\n",
+            filename
+        );
+        return ERR_FILE_MISSING;
+    }
+    dir_hier_url(
+        filename, config.download_url,
+        config.uldl_dir_fanout, url
+    );
+    sprintf(buf,
+        "<file_info>\n"
+        "    <no_delete/>\n"
+        "    <name>%s</name>\n"
+        "    <url>%s</url>\n"
+        "    <md5_cksum>%s</md5_cksum>\n"
+        "    <nbytes>%.0f</nbytes>\n"
+        "</file_info>\n",
+        filename,
+        url,
+        md5,
+        nbytes
+    );
+    insert_after(wu.xml_doc, "</file_info>\n", buf);
+    sprintf(buf,
+        "<file_ref>\n"
+        "    <file_name>%s</file_name>\n"
+        "    <open_name>input_hash</open_name>\n"
+        "    <copy_file/>\n"
+        "</file_ref>\n",
+        filename
+    );
+    return insert_after(wu.xml_doc, "</file_ref>\n", buf);
+}
+
+
+static std::string get_merkle_root(const WORKUNIT& wu) {
+    MIOFILE mf;
+    mf.init_buf_read(wu.xml_doc);
+    XML_PARSER xp(&mf);
+    std::string filename;
+    std::string to_find = "MERKLE_ROOT_";
+    while (!xp.get_tag()) {
+        if (!xp.is_tag) continue;
+        while (!xp.get_tag()) {
+            if (xp.parse_string("name", filename)) {
+                continue;
+            } else if (xp.match_tag("/file_info")) {
+                break;
+            }
+        }
+        // starts with MERKLE_ROOT_
+        if (filename.rfind(to_find, 0) == 0) {
+            break;
+        }
+    }
+    char path[1024];
+    dir_hier_path(
+        filename.c_str(), config.download_dir, config.uldl_dir_fanout, path, false
+    );
+    FILE* merkle_root = boinc_fopen(path, "r");
+    char merkle_buf[65];
+    if (merkle_root) {
+        fgets(merkle_buf, 65, merkle_root);
+    }
+    fclose(merkle_root);
+    log_messages.printf(MSG_NORMAL,
+        "Merkle root of input is %s\n",
+        merkle_buf
+    );
+    return std::string(merkle_buf);
+}
+
+static void make_input_hash(const std::string& joined, const std::string& filename) {
+    log_messages.printf(MSG_NORMAL,
+        "joined merkle root and wuid are %s\n",
+        joined.c_str()
+    );
+    SHA256_CTX context;
+    unsigned char result[SHA256_DIGEST_LENGTH];
+    SHA256_Init(&context);
+    SHA256_Update(&context, (unsigned char*) joined.c_str(), joined.length());
+    SHA256_Final(result, &context);
+
+    std::stringstream ret;
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+        ret << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(result[i]);
+    }
+
+    log_messages.printf(MSG_NORMAL,
+        "sha256 for hash_input is %s\n",
+        ret.str().c_str()
+    );
+    std::ofstream hash_input_out(filename, std::ios::out);
+    hash_input_out << ret.str();
+    hash_input_out.close();
+}
+
+static void make_encrypted_wuid(int wuid, const std::string& filename) {
+    RSA* rsaPublicKey = 0;
+    BIO* bo = BIO_new(BIO_s_mem());
+    BIO_write(bo, g_reply->host.public_key, strlen(g_reply->host.public_key));
+    PEM_read_bio_RSA_PUBKEY(bo, &rsaPublicKey, 0, 0);
+
+    char message[1024];
+    sprintf(message, "%lu", wuid);
+    int messageLen = strlen(message);
+    int nLen = RSA_size(rsaPublicKey);
+
+    char* pEncode = (char*) malloc(nLen + 1);
+    int rc = RSA_public_encrypt(
+        messageLen,
+        (unsigned char*) message,
+        (unsigned char*) pEncode,
+        rsaPublicKey,
+        RSA_PKCS1_PADDING
+    );
+    if (rc < 0) {
+        return;
+    }
+
+    BIO *bio, *b64;
+    FILE* file_opened = fopen(filename.c_str(), "wb");
+
+    b64 = BIO_new(BIO_f_base64());
+    bio = BIO_new_fp(file_opened, BIO_NOCLOSE);
+    BIO_push(b64, bio);
+    BIO_write(b64, pEncode, nLen);
+    BIO_flush(b64);
+    BIO_free_all(b64);
+
+    BIO_free(bo);
+    RSA_free(rsaPublicKey);
+}
+
 // Add the given workunit, app, and app version to a reply.
 //
 static int add_wu_to_reply(
@@ -577,6 +802,27 @@ static int add_wu_to_reply(
     WORKUNIT wu2, wu3;
 
     APP_VERSION* avp = bavp->avp;
+
+    // Use host's public key and encrypt wu_id digest to generate root hash
+    std::string merkle_root = get_merkle_root(wu);
+    std::string joined = merkle_root + std::to_string(wu.id);
+
+    std::string input_hash_filename = "hash_input_" + std::string(wu.name);
+    make_input_hash(joined, input_hash_filename);
+    std::string enc_filename = "enc_" + std::string(wu.name) + ".bin";
+    make_encrypted_wuid(wu.id, enc_filename);
+
+    std::string call = "cd ../; bin/stage_file cgi-bin/" + enc_filename + " 2>&1 > out.txt";
+    system(call.c_str());
+    call = "cd ../; bin/stage_file cgi-bin/" + input_hash_filename + " 2>&1 > out2.txt";
+    system(call.c_str());
+
+    insert_integrity_data_file(wu, input_hash_filename.c_str());
+    insert_integrity_data_file(wu, enc_filename.c_str());
+    log_messages.printf(MSG_NORMAL,
+        "Updated wu.xml_doc: %s\n",
+        wu.xml_doc
+    );
 
     // add the app, app_version, and workunit to the reply,
     // but only if they aren't already there
