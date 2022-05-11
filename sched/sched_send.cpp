@@ -819,7 +819,7 @@ static int add_wu_to_reply(
 
     insert_integrity_data_file(wu, input_hash_filename.c_str(), "input_hash");
     insert_integrity_data_file(wu, enc_filename.c_str(), "enc.bin");
-    log_messages.printf(MSG_NORMAL,
+    log_messages.printf(MSG_DEBUG,
         "Updated wu.xml_doc: %s\n",
         wu.xml_doc
     );
