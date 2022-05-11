@@ -649,7 +649,7 @@ static int insert_wu_tags(WORKUNIT& wu, APP& app) {
     return insert_after(wu.xml_doc, "<workunit>\n", buf);
 }
 
-static int insert_integrity_data_file(WORKUNIT& wu, const char* filename) {
+static int insert_integrity_data_file(WORKUNIT& wu, const char* filename, const char* openname) {
     char md5[33], buf[4096], url[256];
     double nbytes;
 
@@ -685,10 +685,10 @@ static int insert_integrity_data_file(WORKUNIT& wu, const char* filename) {
     sprintf(buf,
         "<file_ref>\n"
         "    <file_name>%s</file_name>\n"
-        "    <open_name>input_hash</open_name>\n"
+        "    <open_name>%s</open_name>\n"
         "    <copy_file/>\n"
         "</file_ref>\n",
-        filename
+        filename, openname
     );
     return insert_after(wu.xml_doc, "</file_ref>\n", buf);
 }
@@ -817,8 +817,8 @@ static int add_wu_to_reply(
     call = "cd ../; bin/stage_file cgi-bin/" + input_hash_filename + " 2>&1 > out2.txt";
     system(call.c_str());
 
-    insert_integrity_data_file(wu, input_hash_filename.c_str());
-    insert_integrity_data_file(wu, enc_filename.c_str());
+    insert_integrity_data_file(wu, input_hash_filename.c_str(), "input_hash");
+    insert_integrity_data_file(wu, enc_filename.c_str(), "enc.bin");
     log_messages.printf(MSG_NORMAL,
         "Updated wu.xml_doc: %s\n",
         wu.xml_doc
