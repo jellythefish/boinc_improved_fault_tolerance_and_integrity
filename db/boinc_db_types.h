@@ -378,6 +378,7 @@ struct HOST {
     double client_start_time;
     double previous_uptime;
 
+    char public_key[BLOB_SIZE];
 
     int parse(XML_PARSER&);
     int parse_time_stats(XML_PARSER&);

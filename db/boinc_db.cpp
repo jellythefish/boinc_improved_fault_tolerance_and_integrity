@@ -546,6 +546,7 @@ void DB_HOST::db_print(char* buf){
     ESCAPE(os_name);
     ESCAPE(os_version);
     ESCAPE(product_name);
+    ESCAPE(public_key);
     sprintf(buf,
         "create_time=%d, userid=%lu, "
         "rpc_seqno=%d, rpc_time=%d, "
@@ -569,7 +570,7 @@ void DB_HOST::db_print(char* buf){
         "error_rate=%.15e, "
         "product_name='%s', "
         "gpu_active_frac=%.15e, "
-        "p_ngpus=%d, p_gpu_fpops=%.15e ",
+        "p_ngpus=%d, p_gpu_fpops=%.15e, public_key=%s ",
         create_time, userid,
         rpc_seqno, rpc_time,
         total_credit, expavg_credit, expavg_time,
@@ -592,7 +593,7 @@ void DB_HOST::db_print(char* buf){
         _error_rate,
         product_name,
         gpu_active_frac,
-        p_ngpus, p_gpu_fpops
+        p_ngpus, p_gpu_fpops, public_key
     );
     UNESCAPE(domain_name);
     UNESCAPE(serialnum);
@@ -603,6 +604,7 @@ void DB_HOST::db_print(char* buf){
     UNESCAPE(os_version);
     UNESCAPE(host_cpid);
     UNESCAPE(product_name);
+    UNESCAPE(public_key);
 }
 
 void DB_HOST::db_parse(MYSQL_ROW &r) {
@@ -654,6 +656,9 @@ void DB_HOST::db_parse(MYSQL_ROW &r) {
     _error_rate = atof(r[i++]);
     strcpy2(product_name, r[i++]);
     gpu_active_frac = atof(r[i++]);
+    i++; // p_ngpus
+    i++; // p_gpu_fpops
+    strcpy2(public_key, r[i++]);
 }
 
 int DB_HOST::update_diff_validator(HOST& h) {

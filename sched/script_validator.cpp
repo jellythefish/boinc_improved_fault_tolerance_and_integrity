@@ -133,6 +133,9 @@ int init_result(RESULT& result, void*&) {
         } else if (s == "result_id") {
             sprintf(buf, " %lu", result.id);
             strcat(cmd, buf);
+        } else if (s == "wu_id") {
+            sprintf(buf, " %lu", result.workunitid);
+            strcat(cmd, buf);
         }
     }
     retval = system(cmd);

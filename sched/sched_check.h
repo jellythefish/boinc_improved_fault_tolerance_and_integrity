@@ -36,6 +36,7 @@
 #define INFEASIBLE_CUSTOM       10
 #define INFEASIBLE_USER_FILTER  11
 #define INFEASIBLE_HAV          12
+#define INFEASIBLE_RSA_KEYS     13
 
 extern const char* infeasible_string(int);
 

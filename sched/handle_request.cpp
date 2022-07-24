@@ -1244,6 +1244,8 @@ void process_request(char* code_sign_key) {
     // FROM HERE ON DON'T RETURN; "goto leave" instead
     // (because ssp->no_work() may have tagged an entry in the work array
     // with our process ID)
+    
+    DB_HOST host;
 
     retval = open_database();
     if (retval) {
@@ -1264,6 +1266,24 @@ void process_request(char* code_sign_key) {
     g_reply->nucleus_only = false;
 
     log_request();
+
+    // if host did not initialize public/private keys tell it to do it
+    sprintf(buf, "where id=%lu", g_reply->host.id);
+    retval = host.lookup(buf);
+    if (!strlen(host.public_key)) {
+        log_messages.printf(MSG_CRITICAL,
+            "[HOST#%lu] host has got no public key. Telling to assign workunit for it.\n",
+            g_reply->host.id, host.public_key
+        );
+        char filepath[256];
+        sprintf(filepath, "%s/integrity/GEN_KEYS_HOST_ID_%lu", config.project_dir, g_reply->host.id);
+        int fd = open(filepath, O_RDONLY|O_CREAT, S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);
+        if (fd < 0) {
+            log_messages.printf(MSG_CRITICAL, "Failed to create file associated with keygen job. Error: %s\n", strerror(errno));
+            goto leave;
+        }
+        close(fd);
+    }
 
 #if 0
     // if you need to debug a problem w/ a particular host or user,
